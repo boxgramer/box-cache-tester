@@ -10,7 +10,7 @@ struct Cli {
 }
 
 #[derive(Parser)]
-#[command(version = "1.0")]
+#[command(version = "1.0", disable_help_flag = true)]
 struct CommandArg {
     #[arg(long)]
     header: Option<String>,
@@ -42,14 +42,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             break;
         }
 
-        let mut args = input.split_whitespace().collect::<Vec<&str>>();
-        let path_url = args.remove(0);
+        let args = shell_words::split(input)?;
+        let path_url = if let Some(path) = args.first() {
+            path
+        } else {
+            ""
+        };
 
-        let command = CommandArg::try_parse_from(&args)?;
-
+        let command = CommandArg::try_parse_from(&args).unwrap_or_else(|e| {
+            eprintln!("argument invalidd :{:?}", e);
+            std::process::exit(1)
+        });
         reflect = command.reflect;
+
         if let Some(header) = command.header {
+            println!("header : {}", header);
             headers.push(header);
+        } else {
+            println!("header none")
         }
 
         println!("input : {}", input);
