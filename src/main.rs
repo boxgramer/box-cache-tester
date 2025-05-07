@@ -50,10 +50,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     break;
                 }
                 devider();
-                println!("Request:");
+                let (html, url, headers) = send_request(host.clone(), path, headers.clone())?;
+                println!("Request: {:?}", url.as_str());
                 devider();
-                let (html, headers) = send_request(host.clone(), path, headers.clone())?;
                 devider();
+
                 for (key, value) in headers.iter() {
                     println!("{:?},{:?} ", key, value)
                 }
@@ -75,7 +76,7 @@ fn add_input(
 ) -> Result<(bool, String), Box<dyn std::error::Error>> {
     let input = readline.trim();
 
-    if input == "quit" {
+    if input == "quit" || input == "exit" {
         println!("appliaction exit");
         return Ok((false, "".to_string()));
     }
@@ -132,15 +133,15 @@ fn send_request(
     host: String,
     path: String,
     headers: HeaderMap,
-) -> Result<(String, HeaderMap), Box<dyn std::error::Error>> {
+) -> Result<(String, String, HeaderMap), Box<dyn std::error::Error>> {
     let client = Client::new();
-    let url = Url::parse(format!("https://{}{}", host, path).as_str())?;
-    let res = client.get(url).headers(headers).send()?;
+    let url = format!("{}{}", host, path);
+    let res = client.get(url.clone()).headers(headers).send()?;
 
     let headers = res.headers().clone();
     let html = res.text()?;
 
-    Ok((html, headers))
+    Ok((html, url, headers))
 }
 
 fn matching(html: String, reflect: String) -> String {
