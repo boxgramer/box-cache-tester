@@ -1,9 +1,11 @@
-use std::io::{self, Write};
-
 use clap::Parser;
+use colored::*;
 use regex::Regex;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use rustyline::Editor;
+use reqwest::blocking::Client;
+use reqwest::{
+    header::{HeaderMap, HeaderName, HeaderValue},
+    Url,
+};
 
 #[derive(Parser)]
 #[command(version = "1.0", about = "Request Cache Tester")]
@@ -21,7 +23,7 @@ struct CommandArg {
     #[arg(short = 'R', long)]
     remove: Option<String>,
 
-    #[arg(short = 'f', long)]
+    #[arg(short = 'F', long)]
     reflect: Option<String>,
 }
 
@@ -33,8 +35,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .url
         .ok_or_else(|| Box::<dyn std::error::Error>::from("please insert target url"))?;
 
-    println!("Target:{}", host);
-
     let mut rl = rustyline::DefaultEditor::new()?;
 
     loop {
@@ -44,10 +44,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(readline) => {
                 let _ = rl.add_history_entry(readline.as_str());
 
-                let status = add_input(readline, &mut reflect, &mut headers)?;
+                println!("Target:{}", host);
+                let (status, path) = add_input(readline, &mut reflect, &mut headers)?;
                 if !status {
                     break;
                 }
+                devider();
+                println!("Request:");
+                devider();
+                let (html, headers) = send_request(host.clone(), path, headers.clone())?;
+                devider();
+                for (key, value) in headers.iter() {
+                    println!("{:?},{:?} ", key, value)
+                }
+                devider();
+                let foundhtml = matching(html, reflect.clone().unwrap_or_else(|| "".to_string()));
+                println!("{}", foundhtml);
+                devider();
             }
             Err(_) => println!("No input"),
         }
@@ -59,12 +72,12 @@ fn add_input(
     readline: String,
     reflect: &mut Option<String>,
     headers: &mut HeaderMap,
-) -> Result<bool, Box<dyn std::error::Error>> {
+) -> Result<(bool, String), Box<dyn std::error::Error>> {
     let input = readline.trim();
 
     if input == "quit" {
         println!("appliaction exit");
-        return Ok(false);
+        return Ok((false, "".to_string()));
     }
 
     let args = shell_words::split(input)?;
@@ -81,7 +94,7 @@ fn add_input(
     *reflect = command.reflect;
 
     if let Some(header) = command.header {
-        println!("header : {}", header);
+        // println!("header : {}", header);
         let rgx = Regex::new(r"^(.*?):\s*(.*)$").unwrap();
         if let Some(cap) = rgx.captures(&header) {
             let left = cap.get(1).unwrap().as_str();
@@ -96,22 +109,48 @@ fn add_input(
     }
 
     if let Some(remove) = command.remove {
-        println!("remove header: {} ", remove);
+        // println!("remove header: {} ", remove);
         headers.remove(remove);
     }
 
-    println!("input : {}", input);
-    println!("args : {:?}", args);
+    // println!("input : {}", input);
+    // println!("args : {:?}", args);
     println!("path : {}", path_url);
     println!("headers:{:?}", headers);
     println!(
-        "reflect: {}",
+        "find: {}",
         match &reflect {
             Some(s) => s.as_str(),
             None => "",
         }
     );
 
-    let client = reqwest::Client::new();
-    Ok(true)
+    Ok((true, path_url.to_string()))
+}
+
+fn send_request(
+    host: String,
+    path: String,
+    headers: HeaderMap,
+) -> Result<(String, HeaderMap), Box<dyn std::error::Error>> {
+    let client = Client::new();
+    let url = Url::parse(format!("https://{}{}", host, path).as_str())?;
+    let res = client.get(url).headers(headers).send()?;
+
+    let headers = res.headers().clone();
+    let html = res.text()?;
+
+    Ok((html, headers))
+}
+
+fn matching(html: String, reflect: String) -> String {
+    let found = html.find(&reflect);
+    match found {
+        Some(_) => html.replace(&reflect, &reflect.red().to_string()),
+        None => html,
+    }
+}
+
+fn devider() {
+    println!("{}", "-".repeat(50))
 }
