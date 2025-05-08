@@ -1,11 +1,9 @@
+use std::sync::{Arc, Mutex};
+
 use clap::Parser;
 use colored::*;
+use curl::easy::{Easy, List};
 use regex::Regex;
-use reqwest::blocking::Client;
-use reqwest::{
-    header::{HeaderMap, HeaderName, HeaderValue},
-    Url,
-};
 
 #[derive(Parser)]
 #[command(version = "1.0", about = "Request Cache Tester")]
@@ -29,7 +27,7 @@ struct CommandArg {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
-    let mut headers: HeaderMap = HeaderMap::new();
+    let mut headers: Vec<String> = Vec::new();
     let mut reflect: Option<String> = None;
     let host = cli
         .url
@@ -55,8 +53,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 devider();
                 devider();
 
-                for (key, value) in headers.iter() {
-                    println!("{:?},{:?} ", key, value)
+                for value in headers.iter() {
+                    println!("{:?} ", value);
                 }
                 devider();
                 let foundhtml = matching(html, reflect.clone().unwrap_or_else(|| "".to_string()));
@@ -72,7 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn add_input(
     readline: String,
     reflect: &mut Option<String>,
-    headers: &mut HeaderMap,
+    headers: &mut Vec<String>,
 ) -> Result<(bool, String), Box<dyn std::error::Error>> {
     let input = readline.trim();
 
@@ -100,10 +98,7 @@ fn add_input(
         if let Some(cap) = rgx.captures(&header) {
             let left = cap.get(1).unwrap().as_str();
             let right = cap.get(2).unwrap().as_str();
-            headers.insert(
-                HeaderName::from_bytes(left.as_bytes())?,
-                HeaderValue::from_str(right)?,
-            );
+            headers.push(format!("{}: {}", left, right));
         }
     } else {
         println!("header none")
@@ -111,7 +106,13 @@ fn add_input(
 
     if let Some(remove) = command.remove {
         // println!("remove header: {} ", remove);
-        headers.remove(remove);
+        headers.retain(|header| {
+            if let Some((key, _)) = header.split_once(':') {
+                !key.to_lowercase().contains(&remove)
+            } else {
+                true
+            }
+        });
     }
 
     // println!("input : {}", input);
@@ -132,16 +133,44 @@ fn add_input(
 fn send_request(
     host: String,
     path: String,
-    headers: HeaderMap,
-) -> Result<(String, String, HeaderMap), Box<dyn std::error::Error>> {
-    let client = Client::new();
+    headers: Vec<String>,
+) -> Result<(String, String, Vec<String>), Box<dyn std::error::Error>> {
+    let mut easy = Easy::new();
     let url = format!("{}{}", host, path);
-    let res = client.get(url.clone()).headers(headers).send()?;
+    easy.url(url.as_str())?;
 
-    let headers = res.headers().clone();
-    let html = res.text()?;
+    let mut request_header = List::new();
+    for header in headers.iter() {
+        request_header.append(header.as_str())?;
+    }
+    easy.http_headers(request_header)?;
 
-    Ok((html, url, headers))
+    let response_header = Arc::new(Mutex::new(Vec::new()));
+    let response_header_clone = Arc::clone(&response_header);
+    easy.header_function(move |header| {
+        let line = String::from_utf8_lossy(header).trim().to_string();
+        if let Ok(mut rheader) = response_header_clone.lock() {
+            rheader.push(line);
+        }
+        true
+    })?;
+
+    let body = Arc::new(Mutex::new(Vec::new()));
+    let body_clone = Arc::clone(&body);
+    easy.write_function(move |data| {
+        if let Ok(mut body) = body_clone.lock() {
+            body.extend_from_slice(data);
+        }
+        Ok(data.len())
+    })?;
+
+    easy.perform()?;
+
+    let html = body.lock().unwrap();
+    let html_body = String::from_utf8_lossy(&html);
+    let result_header = response_header.lock().unwrap().clone();
+
+    Ok((html_body.to_string(), url, result_header))
 }
 
 fn matching(html: String, reflect: String) -> String {
